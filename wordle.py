@@ -1,5 +1,7 @@
 from numpy import Infinity, log2
 import json
+import os
+import random
 from pathlib import Path
 
 words = [word.strip() for word in list(open('words_freq.txt'))]
@@ -10,6 +12,11 @@ def score_fn(max_freq: int) -> dict:
     return scores
 scores = score_fn(len(words))
 
+def lookup_path(parent_path, word):
+    return f'lookup/{parent_path}{word}.json'
+
+def percent(x, total):
+    return f'{round(100*x/total, 1)}%'
 
 def wordle_str(guess: str, word: str): 
     wordle_string = ['g', 'g', 'g', 'g', 'g']
@@ -52,7 +59,7 @@ def get_input(best_word, min_score):
     
     return game_response
 
-def eliminate_words(viable_words: list, best_word: str, min_score: float, filter_str: str):
+def eliminate_words(viable_words: list, best_word: str, min_score: float, filter_str: str, debug: str='pw'):
     global words, scores
 
     filter_str_hash = wordle_str_hash(filter_str)
@@ -62,8 +69,11 @@ def eliminate_words(viable_words: list, best_word: str, min_score: float, filter
         return viable_words, best_word, min_score
 
     for i, guess in enumerate(words):
-        if i % 1000 == 999: 
-            print(f'  {round(100*i/len(words), 1)}%')
+        # if "p" debug flag is set, print [p]ercentage completion
+        if i % 1000 == 999 and 'p' in debug: 
+            # if "r" debug flag set, only print percent [r]arely 
+            if 'r' not in debug or random.random() < (1/4):
+                print(f'  {percent(i, len(words))}')
 
         freq_table = [0] * 3**5
         for word in viable_words:
@@ -74,9 +84,11 @@ def eliminate_words(viable_words: list, best_word: str, min_score: float, filter
         if score < min_score:
             min_score = score
             best_word = guess
-            print(f'! {min_score}@{best_word}')
+            # if "w" in debug flag, print new best [w]ord
+            if 'w' in debug:
+                print(f'! {min_score}@{best_word}')
 
-    return viable_words, best_word, min_score
+    return best_word, min_score, viable_words
 
 def play():
     global words
@@ -88,10 +100,10 @@ def play():
 
     for _ in range(6):
         response = get_input(best_word, min_score)
-        if(Path(f'lookup/{parent_path}{best_word}.json').is_file()):
-            best_word, min_score, viable_words = read_variation(parent_path, best_word, response)
+        if(Path(lookup_path(parent_path, best_word)).is_file()):
+            best_word, min_score, viable_words = read_variations(parent_path, best_word)[response]
         else:
-            viable_words, best_word, min_score = eliminate_words(viable_words, best_word, min_score, filter_str=response)
+            best_word, min_score, viable_words = eliminate_words(viable_words, best_word, min_score, filter_str=response)
 
         parent_path += f'{best_word}/'
 
@@ -106,33 +118,60 @@ def play():
             if len(viable_words) <= 10:
                 print(f'    There were <10 options: {viable_words}')
 
-def make_tree(start_viable_words, parent_path, start_word='tares'):
+def make_tree(start_viable_words, parent_path, start_word='tares', min_score=Infinity):
     viable_words = start_viable_words
     best_word = start_word
-    min_score = Infinity
 
-    with open(f'lookup/{parent_path}{start_word}.json', 'w') as file:
+    log_path = lookup_path(parent_path, start_word)
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+    with open(log_path, 'w') as file:
         info_dict = {}
         for i in range(3**5):
+            tmp = i
             filter_str = ''
             for _ in range(5):
-                filter_str += '*yg'[i%3]
-                i //= 3
+                filter_str += '*yg'[tmp%3]
+                tmp //= 3
 
-            # print(f'testing string {filter_str}')
-            v, b, m = eliminate_words(viable_words, best_word, min_score, filter_str)
-            # print(b, m, v)
-            info_dict[filter_str] = [b, m if m != Infinity else 9999999, v]
+            print(f'{start_word}:', filter_str, f'[{percent(i, 3**5)}]')
+
+            word, score, v_words = eliminate_words(viable_words, best_word, min_score, filter_str, debug='pr')
+
+            info_dict[filter_str] = [word, score if score != Infinity else 9999999, v_words]
         file.write(json.dumps(info_dict))
 
-def read_variation(parent_path: str, name: str, filter_str: str):
-    with open(f'lookup/{parent_path}{name}.json') as file:
+def read_variations(parent_path: str, name: str) -> dict:
+    with open(lookup_path(parent_path, name)) as file:
         data = '\n'.join(file.readlines())
         info_dict = json.loads(data)
 
-        return info_dict[filter_str]    
+        return info_dict  
 
 if __name__ == '__main__':
-    play()
-    # make_tree(words, parent_path='')
+    # play()
+    base_word = 'tares'
+    parent_path = ''
+
+    replace = False
+    base_vars = read_variations(parent_path, base_word)
+
+    parent_path += f'{base_word}/'
+    for filter_str, variation in base_vars.items():
+        word, score, viable_words = variation
+        
+        print(f'{filter_str} {word} {score} {viable_words[:10]}...{len(viable_words)}')
+        skip = '' #input()
+        if len(skip) > 0:
+            continue
+
+        # don't overwrite
+        if(not replace and Path(lookup_path(parent_path, word)).is_file()):
+            continue
+
+        if len(viable_words) <= 1:
+            input('length of viable words <= 1')
+            continue
+        
+        make_tree(start_viable_words=viable_words, parent_path=parent_path, start_word=word, min_score=score)
     # print(read_variation('', 'tares', '*gg**'))
